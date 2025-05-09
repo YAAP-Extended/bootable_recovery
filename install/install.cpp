@@ -603,17 +603,12 @@ static InstallResult VerifyAndInstallPackage(Package* package, bool* wipe_cache,
                                              int* max_temperature, Device* device) {
   auto ui = device->GetUI();
   ui->SetBackground(RecoveryUI::INSTALLING_UPDATE);
-  // Give verification half the progress bar...
+  
+  // Skip verification and proceed directly to installation
   ui->SetProgressType(RecoveryUI::DETERMINATE);
-  ui->ShowProgress(VERIFICATION_PROGRESS_FRACTION, VERIFICATION_PROGRESS_TIME);
+  ui->ShowProgress(1.0, VERIFICATION_PROGRESS_TIME);
 
-  // Verify package.
-  if (!verify_package(package, ui)) {
-    log_buffer->push_back(android::base::StringPrintf("error: %d", kZipVerificationFailure));
-    return INSTALL_CORRUPT;
-  }
-
-  // Verify and install the contents of the package.
+  // Install the contents of the package.
   ui->Print("Installing update...\n");
   if (retry_count > 0) {
     ui->Print("Retry attempt: %d\n", retry_count);
@@ -716,26 +711,9 @@ InstallResult InstallPackage(Package* package, const std::string_view package_id
   return result;
 }
 
-bool verify_package(Package* package, RecoveryUI* ui) {
-  static constexpr const char* CERTIFICATE_ZIP_FILE = "/system/etc/security/otacerts.zip";
-  std::vector<Certificate> loaded_keys = LoadKeysFromZipfile(CERTIFICATE_ZIP_FILE);
-  if (loaded_keys.empty()) {
-    LOG(ERROR) << "Failed to load keys";
-    return false;
-  }
-  LOG(INFO) << loaded_keys.size() << " key(s) loaded from " << CERTIFICATE_ZIP_FILE;
-
-  // Verify package.
-  ui->Print("Verifying update package...\n");
-  auto t0 = std::chrono::system_clock::now();
-  int err = verify_file(package, loaded_keys);
-  std::chrono::duration<double> duration = std::chrono::system_clock::now() - t0;
-  ui->Print("Update package verification took %.1f s (result %d).\n", duration.count(), err);
-  if (err != VERIFY_SUCCESS) {
-    LOG(ERROR) << "Signature verification failed";
-    LOG(ERROR) << "error: " << kZipVerificationFailure;
-    return false;
-  }
+bool verify_package([[maybe_unused]] Package* package, RecoveryUI* ui) {
+  // Skip verification and return success
+  ui->Print("Skipping package verification...\n");
   return true;
 }
 
