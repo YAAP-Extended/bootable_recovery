@@ -414,13 +414,16 @@ int setup_install_mounts() {
     LOG(ERROR) << "can't set up install mounts: no fstab loaded";
     return -1;
   }
+
   for (const FstabEntry& entry : fstab) {
     // We don't want to do anything with "/".
     if (entry.mount_point == "/" || entry.mount_point == "/sdcard") {
       continue;
     }
 
-    if (entry.mount_point == "/tmp" || entry.mount_point == "/cache") {
+    // Mount /tmp and /cache for installation, and /vendor_dlkm if it exists in fstab
+    if (entry.mount_point == "/tmp" || entry.mount_point == "/cache" || 
+        (volume_for_mount_point("/vendor_dlkm") != nullptr && entry.mount_point == "/vendor_dlkm")) {
       if (ensure_path_mounted(entry.mount_point) != 0) {
         LOG(ERROR) << "Failed to mount " << entry.mount_point;
         return -1;
