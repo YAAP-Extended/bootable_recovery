@@ -193,11 +193,9 @@ static bool CheckAbSpecificMetadata(const std::map<std::string, std::string>& me
   if (!build_fingerprint.empty()) {
     const auto& post_build_tag = build_fingerprint.back();
     const auto build_tag = android::base::GetProperty("ro.build.tags", "");
-    if (build_tag != post_build_tag) {
-      LOG(ERROR) << "Post build-tag " << post_build_tag << " does not match device build tag "
-                 << build_tag;
-      return false;
-    }
+    // Skip build tag verification
+    LOG(INFO) << "Skipping build tag verification (post_build_tag: " << post_build_tag 
+              << ", device build tag: " << build_tag << ")";
   }
 
   return true;
