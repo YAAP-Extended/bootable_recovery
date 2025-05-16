@@ -619,6 +619,7 @@ static Device::BuiltinAction PromptAndWait(Device* device, InstallResult status)
 
       case Device::APPLY_ADB_SIDELOAD:
       case Device::APPLY_SDCARD:
+      case Device::APPLY_OTG:
       case Device::ENTER_RESCUE: {
         save_current_log = true;
 
@@ -633,12 +634,17 @@ static Device::BuiltinAction PromptAndWait(Device* device, InstallResult status)
           status = ApplyFromAdb(device, true /* rescue_mode */, &reboot_action);
         } else if (chosen_action == Device::APPLY_ADB_SIDELOAD) {
           status = ApplyFromAdb(device, false /* rescue_mode */, &reboot_action);
+        } else if (chosen_action == Device::APPLY_OTG) {
+          adb = false;
+          status = ApplyFromOtg(device);
         } else {
           adb = false;
           status = ApplyFromSdcard(device);
         }
 
-        ui->Print("\nInstall from %s completed with status %d.\n", adb ? "ADB" : "SD card", status);
+        ui->Print("\nInstall from %s completed with status %d.\n", 
+                 adb ? "ADB" : (chosen_action == Device::APPLY_OTG ? "OTG" : "SD card"), 
+                 status);
         if (status == INSTALL_REBOOT) {
           return reboot_action;
         }
@@ -908,6 +914,13 @@ Device::BuiltinAction start_recovery(Device* device, const std::vector<std::stri
                 status = INSTALL_ERROR;
                 goto error;
             }
+        } else if (!strncmp("/storage/usbotg", update_package, 15)) {
+            status = ApplyFromOtg(device);
+            if (status != INSTALL_SUCCESS) {
+                ui->Print("Installation aborted.\n");
+                goto error;
+            }
+            goto done;
         }
     }
 
@@ -1035,6 +1048,7 @@ Device::BuiltinAction start_recovery(Device* device, const std::vector<std::stri
     ui->SetBackground(RecoveryUI::NO_COMMAND);
   }
 
+done:
 error:
   if (status == INSTALL_ERROR || status == INSTALL_CORRUPT) {
     ui->SetBackground(RecoveryUI::ERROR);

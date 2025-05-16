@@ -46,12 +46,17 @@
 #define SDCARD_BLK_1_PATH "/dev/block/mmcblk1p1"
 #define SDEXPRESS_0_TYPE_PATH "/sys/block/nvme0n1/device/transport"
 #define SDEXPRESS_BLK_0_PATH "/dev/block/nvme0n1p1"
+#define OTG_0_TYPE_PATH "/sys/block/sda/device/type"
+#define OTG_BLK_0_PATH "/dev/block/sda1"
+#define OTG_ROOT "/storage/usbotg"
 
 static constexpr const char* SDCARD_ROOT = "/sdcard";
 
 // How long (in seconds) we wait for the fuse-provided package file to
 // appear, before timing out.
 static constexpr int SDCARD_INSTALL_TIMEOUT = 10;
+
+static constexpr int OTG_INSTALL_TIMEOUT = 10;
 
 // Set the BCB to reboot back into recovery (it won't resume the install from
 // sdcard though).
@@ -330,5 +335,80 @@ InstallResult ApplyFromSdcard(Device* device) {
 
   auto result = InstallWithFuseFromPath(path, device);
   ensure_path_unmounted(SDCARD_ROOT);
+  return result;
+}
+
+// Mount OTG drive
+static int do_otg_mount() {
+  // Create mount point if it doesn't exist
+  mkdir(OTG_ROOT, 0755);
+
+  Volume* v = volume_for_mount_point(OTG_ROOT);
+  if (v == nullptr) {
+    LOG(ERROR) << "Unknown volume for " << OTG_ROOT << ". Check fstab\n";
+    return -1;
+  }
+
+  // Check if OTG device exists
+  if (access(OTG_0_TYPE_PATH, F_OK) != 0) {
+    LOG(ERROR) << "No OTG device found at " << OTG_0_TYPE_PATH;
+    return -1;
+  }
+
+  // If fs_type is "auto", try mounting as vfat first, then exfat
+  if (v->fs_type == "auto") {
+    LOG(INFO) << "Filesystem type is auto, trying vfat first";
+    // Attempt to mount as vfat
+    if (mount(OTG_BLK_0_PATH, v->mount_point.c_str(), "vfat", v->flags, v->fs_options.c_str()) == 0) {
+      LOG(INFO) << "Mounted OTG as vfat";
+      return 0;
+    }
+
+    LOG(WARNING) << "Failed to mount OTG as vfat, trying exfat...";
+
+    // If vfat fails, try to mount as exfat
+    if (mount(OTG_BLK_0_PATH, v->mount_point.c_str(), "exfat", v->flags, v->fs_options.c_str()) == 0) {
+      LOG(INFO) << "Mounted OTG as exfat";
+      return 0;
+    }
+  } else {
+    // If fs_type is explicitly set, attempt that directly
+    LOG(INFO) << "Attempting to mount as " << v->fs_type;
+    if (mount(OTG_BLK_0_PATH, v->mount_point.c_str(), v->fs_type.c_str(), v->flags, v->fs_options.c_str()) == 0) {
+      LOG(INFO) << "Mounted OTG as " << v->fs_type;
+      return 0;
+    }
+  }
+
+  LOG(ERROR) << "Failed to mount OTG device";
+  return -1;
+}
+
+InstallResult ApplyFromOtg(Device* device) {
+  auto ui = device->GetUI();
+  ui->Print("Update via OTG. Mounting OTG drive\n");
+
+  if (do_otg_mount() != 0) {
+    LOG(ERROR) << "\nFailed to mount OTG drive\n";
+    return INSTALL_NONE;
+  }
+
+  std::string path = BrowseDirectory(OTG_ROOT, device, ui);
+  if (path.empty()) {
+    LOG(ERROR) << "\n-- No package file selected.\n";
+    ensure_path_unmounted(OTG_ROOT);
+    return INSTALL_NONE;
+  }
+
+  // Hint the install function to read from a block map file.
+  if (android::base::EndsWithIgnoreCase(path, ".map")) {
+    path = "@" + path;
+  }
+
+  ui->Print("\n-- Install %s ...\n", path.c_str());
+  SetSdcardUpdateBootloaderMessage();
+
+  auto result = InstallWithFuseFromPath(path, device);
+  ensure_path_unmounted(OTG_ROOT);
   return result;
 }
