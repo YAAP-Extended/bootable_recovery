@@ -27,8 +27,4 @@
 // block map file with the prefix '@'; e.g. /sdcard/package.zip, @/cache/recovery/block.map.
 InstallResult InstallWithFuseFromPath(std::string_view path, Device* device);
 
-// Installs a package from the sdcard. Returns the install result.
 InstallResult ApplyFromSdcard(Device* device);
-
-// Installs a package from an OTG drive. Returns the install result.
-InstallResult ApplyFromOtg(Device* device);
