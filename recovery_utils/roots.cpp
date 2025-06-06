@@ -422,11 +422,15 @@ int setup_install_mounts() {
     }
 
     // Mount /tmp and /cache for installation, and /vendor_dlkm if it exists in fstab
-    if (entry.mount_point == "/tmp" || entry.mount_point == "/cache" || 
-        (volume_for_mount_point("/vendor_dlkm") != nullptr && entry.mount_point == "/vendor_dlkm")) {
+    if (entry.mount_point == "/tmp" || entry.mount_point == "/cache") {
       if (ensure_path_mounted(entry.mount_point) != 0) {
         LOG(ERROR) << "Failed to mount " << entry.mount_point;
         return -1;
+      }
+    } else if (entry.mount_point == "/vendor_dlkm") {
+      // Try to mount vendor_dlkm but don't fail if it doesn't exist
+      if (ensure_path_mounted(entry.mount_point) != 0) {
+        LOG(WARNING) << "No need to mount " << entry.mount_point << ", continuing anyway";
       }
     } else {
       if (ensure_path_unmounted(entry.mount_point) != 0) {
