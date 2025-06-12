@@ -21,7 +21,12 @@ on init
     symlink /proc/self/fd/1 /dev/stdout
     symlink /proc/self/fd/2 /dev/stderr
 
+    # Создаем /bin с правильными разрешениями
+    mkdir /bin 0755 root root
     symlink /system/bin /bin
+    chmod 0755 /bin
+    chown root root /bin
+
     symlink /system/etc /etc
     rmdir /sbin
     symlink /system/bin /sbin
