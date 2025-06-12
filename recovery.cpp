@@ -759,6 +759,203 @@ static void log_failure_code(ErrorCode code, const std::string& update_package) 
   LOG(INFO) << log_content;
 }
 
+static bool backup_vendor_dlkm() {
+    if (!volume_for_mount_point("/vendor_dlkm")) {
+        LOG(INFO) << "No vendor_dlkm partition found, skipping backup";
+        return true;
+    }
+
+    std::string backup_path = "/tmp/vendor_dlkm_backup.img";
+    std::string vendor_dlkm_path = "/vendor_dlkm";
+
+    // Create backup
+    if (copy_file(vendor_dlkm_path, backup_path) != 0) {
+        LOG(ERROR) << "Failed to backup vendor_dlkm";
+        return false;
+    }
+
+    LOG(INFO) << "Successfully backed up vendor_dlkm to " << backup_path;
+    return true;
+}
+
+static bool restore_vendor_dlkm() {
+    std::string backup_path = "/tmp/vendor_dlkm_backup.img";
+    std::string vendor_dlkm_path = "/vendor_dlkm";
+
+    if (access(backup_path.c_str(), F_OK) != 0) {
+        LOG(INFO) << "No vendor_dlkm backup found, skipping restore";
+        return true;
+    }
+
+    // Restore backup
+    if (copy_file(backup_path, vendor_dlkm_path) != 0) {
+        LOG(ERROR) << "Failed to restore vendor_dlkm";
+        return false;
+    }
+
+    LOG(INFO) << "Successfully restored vendor_dlkm from backup";
+    return true;
+}
+
+static bool update_vendor_dlkm(const std::string& update_path) {
+    if (!volume_for_mount_point("/vendor_dlkm")) {
+        LOG(INFO) << "No vendor_dlkm partition found, skipping update";
+        return true;
+    }
+
+    std::string vendor_dlkm_path = "/vendor_dlkm";
+
+    // Update vendor_dlkm
+    if (copy_file(update_path, vendor_dlkm_path) != 0) {
+        LOG(ERROR) << "Failed to update vendor_dlkm";
+        return false;
+    }
+
+    LOG(INFO) << "Successfully updated vendor_dlkm";
+    return true;
+}
+
+static bool is_kernel_package(const std::string& path) {
+    // Проверяем наличие файла kernel.img или Image в архиве
+    ZipArchiveHandle zip;
+    if (OpenArchive(path.c_str(), &zip) != 0) {
+        LOG(ERROR) << "Failed to open zip file: " << path;
+        return false;
+    }
+
+    bool is_kernel = false;
+    void* cookie;
+    ZipEntry entry;
+    if (StartIteration(zip, &cookie, nullptr, nullptr) == 0) {
+        while (Next(cookie, &entry, nullptr) == 0) {
+            std::string name(entry.name);
+            if (name == "kernel.img" || name == "Image" || name == "Image.gz" || name == "vendor_dlkm.img") {
+                is_kernel = true;
+                break;
+            }
+        }
+        EndIteration(cookie);
+    }
+    CloseArchive(zip);
+    return is_kernel;
+}
+
+static InstallResult install_kernel_package(const std::string& path, Device* device) {
+    LOG(INFO) << "Installing kernel package: " << path;
+    
+    // Создаем временную директорию для распаковки
+    std::string temp_dir = "/tmp/kernel_install";
+    if (mkdir(temp_dir.c_str(), 0755) != 0 && errno != EEXIST) {
+        LOG(ERROR) << "Failed to create temp directory";
+        return INSTALL_ERROR;
+    }
+
+    // Распаковываем архив
+    ZipArchiveHandle zip;
+    if (OpenArchive(path.c_str(), &zip) != 0) {
+        LOG(ERROR) << "Failed to open zip file";
+        return INSTALL_ERROR;
+    }
+
+    void* cookie;
+    ZipEntry entry;
+    if (StartIteration(zip, &cookie, nullptr, nullptr) == 0) {
+        while (Next(cookie, &entry, nullptr) == 0) {
+            std::string name(entry.name);
+            std::string target_path = temp_dir + "/" + name;
+            
+            // Распаковываем файл
+            if (ExtractEntryToFile(zip, &entry, target_path.c_str()) != 0) {
+                LOG(ERROR) << "Failed to extract " << name;
+                continue;
+            }
+
+            // Устанавливаем правильные разрешения
+            chmod(target_path.c_str(), 0644);
+        }
+        EndIteration(cookie);
+    }
+    CloseArchive(zip);
+
+    // Устанавливаем ядро и модули
+    bool success = true;
+    
+    // Проверяем наличие различных форматов ядра
+    std::string kernel_path = temp_dir + "/kernel.img";
+    std::string image_path = temp_dir + "/Image";
+    std::string image_gz_path = temp_dir + "/Image.gz";
+    
+    if (access(kernel_path.c_str(), F_OK) == 0) {
+        if (copy_file(kernel_path, "/dev/block/by-name/boot") != 0) {
+            LOG(ERROR) << "Failed to install kernel.img";
+            success = false;
+        }
+    } else if (access(image_path.c_str(), F_OK) == 0) {
+        if (copy_file(image_path, "/dev/block/by-name/boot") != 0) {
+            LOG(ERROR) << "Failed to install Image";
+            success = false;
+        }
+    } else if (access(image_gz_path.c_str(), F_OK) == 0) {
+        // Распаковываем Image.gz перед установкой
+        std::string cmd = "gunzip -c " + image_gz_path + " > " + temp_dir + "/Image";
+        if (system(cmd.c_str()) != 0) {
+            LOG(ERROR) << "Failed to decompress Image.gz";
+            success = false;
+        } else if (copy_file(temp_dir + "/Image", "/dev/block/by-name/boot") != 0) {
+            LOG(ERROR) << "Failed to install decompressed Image";
+            success = false;
+        }
+    }
+
+    std::string vendor_dlkm_path = temp_dir + "/vendor_dlkm.img";
+    if (access(vendor_dlkm_path.c_str(), F_OK) == 0) {
+        if (!update_vendor_dlkm(vendor_dlkm_path)) {
+            LOG(ERROR) << "Failed to install vendor_dlkm";
+            success = false;
+        }
+    }
+
+    // Очищаем временную директорию
+    std::string cmd = "rm -rf " + temp_dir;
+    system(cmd.c_str());
+
+    return success ? INSTALL_SUCCESS : INSTALL_ERROR;
+}
+
+static bool install_package(const std::string& path, bool* wipe_cache, bool needs_mount) {
+    // Определяем тип пакета
+    if (is_kernel_package(path)) {
+        InstallResult result = install_kernel_package(path, device);
+        if (result != INSTALL_SUCCESS) {
+            LOG(ERROR) << "Failed to install kernel package";
+            return false;
+        }
+        return true;
+    }
+
+    // Стандартная установка прошивки
+    if (needs_mount) {
+        if (ensure_path_mounted(path) != 0) {
+            LOG(ERROR) << "Failed to mount " << path;
+            return false;
+        }
+    }
+
+    // Проверяем подпись пакета
+    if (!verify_package(path)) {
+        LOG(ERROR) << "Failed to verify package signature";
+        return false;
+    }
+
+    // Устанавливаем прошивку
+    if (install_zip(path, wipe_cache) != 0) {
+        LOG(ERROR) << "Failed to install package";
+        return false;
+    }
+
+    return true;
+}
+
 Device::BuiltinAction start_recovery(Device* device, const std::vector<std::string>& args) {
   static constexpr struct option OPTIONS[] = {
     { "fastboot", no_argument, nullptr, 0 },
